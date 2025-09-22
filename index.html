@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Farmwise Kids: Crops, Seeds, Harvest & Shop</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+	html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#0f172a; color:#e5e7eb; }
+	#app { display: grid; grid-template-rows: 60px auto; height: 100%; }
+	header { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; background:#0b1220; border-bottom:1px solid #1f2937; }
+	header .brand { display:flex; align-items:center; gap:10px; font-weight:800; }
+	header .dot { width:10px; height:10px; border-radius:50%; background:#34d399; box-shadow:0 0 12px #34d399; }
+	header .hud { display:flex; gap:10px; align-items:center; }
+	.badge { background:#0c1424; border:1px solid #1f2937; padding:6px 10px; border-radius:999px; font-weight:700; }
+	#map { height: 100%; }
+	.controls {
+		position:absolute; z-index:1000; top:12px; left:12px; width:320px;
+		background:#0b1220; border:1px solid #1f2937; border-radius:12px; padding:12px;
+		box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+	}
+	.controls h3 { margin:0 0 8px; font-size:16px; }
+	.controls .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0; }
+	.btn { background:#122; color:#e5e7eb; border:1px solid #1f2937; padding:10px 12px; border-radius:10px; cursor:pointer; font-weight:600; }
+	.btn:disabled { opacity:0.5; cursor:not-allowed; }
+	.btn.green { background:#0f2a20; border-color:#064e3b; }
+	.btn.blue { background:#0f1f2a; border-color:#1e40af; }
+	.kv { display:grid; grid-template-columns: 1fr auto; gap:6px; font-size:14px; background:#0c1424; padding:8px 10px; border-radius:8px; border:1px solid #1f2937; }
+	.k { color:#9ca3af; }
+	.v { font-weight:700; }
+	.small { font-size:12px; color:#cbd5e1; }
+	.legend { display:flex; gap:8px; align-items:center; margin-top:6px; }
+	.swatch { width:18px; height:18px; border:1px dashed #ef4444; background:rgba(239,68,68,0.15);
+		background-image: repeating-linear-gradient(45deg, rgba(239,68,68,0.45) 0, rgba(239,68,68,0.45) 2px, transparent 2px, transparent 6px);
+		border-radius:4px; }
+
+	/* Crop picker modal */
+	#picker {
+		position: fixed; inset: 0; display: none; place-items: center; background: rgba(0,0,0,0.6); z-index: 1500;
+	}
+	#picker .box {
+		width: min(720px, 94vw); background:#0b1220; border:1px solid #1f2937; border-radius:14px; padding:14px;
+	}
+	#picker h3 { margin:0 0 10px; }
+	.grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap:10px; }
+	.card { background:#0c1424; border:1px solid #1f2937; border-radius:10px; padding:10px; display:flex; flex-direction:column; gap:6px; }
+	.card .title { font-weight:800; }
+	.card .line { display:flex; justify-content:space-between; font-size:12px; color:#cbd5e1; }
+	.buyRow { display:flex; gap:8px; align-items:center; }
+	.qty { width:60px; background:#0b1220; border:1px solid #1f2937; border-radius:8px; padding:6px; color:#e5e7eb; }
+
+	/* Tutorial hint (reuse simple hint) */
+	#hint {
+		position:absolute; z-index:1101; top: 12px; right: 12px; width: 280px;
+		display:none; background:#0b1220; border:1px solid #1f2937; border-radius:12px; padding:12px;
+		box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+	}
+	#hint h4 { margin: 0 0 6px; font-size: 14px; }
+
+	@media (max-width: 720px) {
+		.controls { width: calc(100vw - 24px); left:12px; right:12px; }
+		header .help { display:none; }
+		#hint { width: calc(100vw - 24px); right: 12px; }
+	}
+</style>
+</head>
+<body>
+<div id="app">
+	<header>
+		<div class="brand"><div class="dot"></div><div>Farmwise Kids</div></div>
+		<div class="hud">
+			<div class="badge">Day: <span id="hudDay">1</span></div>
+			<div class="badge">Money: TSh <span id="hudCash">500</span></div>
+		</div>
+	</header>
+
+	<div id="map"></div>
+
+	<div class="controls" aria-live="polite">
+		<h3>Play</h3>
+		<div class="row">
+			<button id="btnPlant" class="btn green" disabled>Plant (P)</button>
+			<button id="btnFert" class="btn blue" disabled>Fertilize (F)</button>
+			<button id="btnIrr" class="btn blue" disabled>Irrigate (I)</button>
+			<button id="btnPlayPause" class="btn">Play ▷</button>
+			<button id="btnStep" class="btn">Next Day</button>
+		</div>
+		<div class="row">
+			<label class="small">Day length: <span id="lblDayLen">5s</span></label>
+			<input id="rngSpeed" type="range" min="500" max="15000" step="500" value="5000" />
+		</div>
+		<div class="row" style="margin-top:6px;">
+			<div class="kv"><div class="k">Last spot</div><div class="v" id="kvSpot">—</div></div>
+			<div class="kv"><div class="k">Soil</div><div class="v" id="kvSoil">—</div></div>
+			<div class="kv"><div class="k">Status</div><div class="v" id="kvStatus">—</div></div>
+		</div>
+		<div class="legend"><div class="swatch"></div><div class="small">No Plant Zone (towns/buildings/water). Mangrove allowed in water.</div></div>
+		<div class="small">Keys: P=Plant, F=Fertilize, I=Irrigate, Space=Play/Pause, +/-=Faster/Slower</div>
+	</div>
+</div>
+
+<!-- Crop picker modal -->
+<div id="picker" role="dialog" aria-modal="true">
+	<div class="box">
+		<h3>Choose a crop for this soil and location</h3>
+		<div class="small" id="pickerInfo">Soil: — | Water zone: —</div>
+		<div id="cropGrid" class="grid" style="margin-top:10px;"></div>
+		<div style="margin-top:10px; display:flex; justify-content:flex-end; gap:8px;">
+			<button id="btnClosePicker" class="btn">Cancel</button>
+		</div>
+	</div>
+</div>
+
+<!-- Hint -->
+<div id="hint">
+	<h4>Tip</h4>
+	<div id="hintBody" class="small">Press P to plant a crop.</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+<script src="https://unpkg.com/osmtogeojson@3.0.0-beta.5/osmtogeojson.js"></script>
+<script>
+/* =================== Map =================== */
+const map = L.map('map', { zoomControl: true }).setView([ -6.3690, 34.8888 ], 6); // Tanzania center
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+setTimeout(() => map.invalidateSize(), 0);
+
+/* =================== Restricted areas =================== */
+/* Buildings/settlements */
+const restrictedLayer = L.geoJSON([], {
+	style: () => ({ color:'#ef4444', weight:2, dashArray:'6,4', fillColor:'#ef4444', fillOpacity:0.15 })
+}).addTo(map);
+/* Water bodies (oceans/lakes/rivers as polygons) */
+const waterLayer = L.geoJSON([], {
+	style: () => ({ color:'#60a5fa', weight:2, dashArray:'6,4', fillColor:'#60a5fa', fillOpacity:0.15 })
+}).addTo(map);
+
+let abortA = null, abortW = null;
+async function loadRestricted() {
+	try {
+		if (abortA) abortA.abort();
+		abortA = new AbortController();
+		const b = map.getBounds();
+		const bbox = `${b.getSouth()},${b.getWest()},${b.getNorth()},${b.getEast()}`;
+		const q = `
+[out:json][timeout:25];
+(
+  way["landuse"~"residential|commercial|industrial|retail"](${bbox});
+  relation["landuse"~"residential|commercial|industrial|retail"](${bbox});
+  way["building"](${bbox});
+  relation["building"](${bbox});
+);
+out body; >; out skel qt;`;
+		const res = await fetch('https://overpass-api.de/api/interpreter', { method:'POST', headers:{'Content-Type':'text/plain;charset=UTF-8'}, body:q, signal:abortA.signal });
+		if (!res.ok) throw new Error();
+		const osm = await res.json();
+		const gj = osmtogeojson(osm);
+		restrictedLayer.clearLayers();
+		restrictedLayer.addData(gj);
+	} catch {}
+}
+async function loadWater() {
+	try {
+		if (abortW) abortW.abort();
+		abortW = new AbortController();
+		const b = map.getBounds();
+		const bbox = `${b.getSouth()},${b.getWest()},${b.getNorth()},${b.getEast()}`;
+		const q = `
+[out:json][timeout:25];
+(
+  way["natural"="water"](${bbox});
+  relation["natural"="water"](${bbox});
+  way["waterway"="riverbank"](${bbox});
+  relation["waterway"="riverbank"](${bbox});
+  way["landuse"="reservoir"](${bbox});
+  relation["landuse"="reservoir"](${bbox});
+);
+out body; >; out skel qt;`;
+		const res = await fetch('https://overpass-api.de/api/interpreter', { method:'POST', headers:{'Content-Type':'text/plain;charset=UTF-8'}, body:q, signal:abortW.signal });
+		if (!res.ok) throw new Error();
+		const osm = await res.json();
+		const gj = osmtogeojson(osm);
+		waterLayer.clearLayers();
+		waterLayer.addData(gj);
+	} catch {}
+}
+map.on('moveend', () => { loadRestricted(); loadWater(); });
+loadRestricted(); loadWater();
+
+function pointInLayer(latlng, layer) {
+	const pt = turf.point([latlng.lng, latlng.lat]);
+	let inside = false;
+	layer.eachLayer(l => {
+		const gj = l.toGeoJSON();
+		if (!gj.geometry) return;
+		if (gj.geometry.type === 'Polygon' || gj.geometry.type === 'MultiPolygon') {
+			if (turf.booleanPointInPolygon(pt, gj)) inside = true;
+		}
+	});
+	return inside;
+}
+function isNoPlantArea(latlng) {
+	return pointInLayer(latlng, restrictedLayer);
+}
+function isWaterArea(latlng) {
+	return pointInLayer(latlng, waterLayer);
+}
+
+/* =================== Soil, UI refs, game state =================== */
+function soilAt(lat, lon) {
+	const v = Math.abs(Math.sin(lat) * Math.cos(lon));
+	if (v < 0.25) return 'Sandy';
+	if (v < 0.5) return 'Loam';
+	if (v < 0.75) return 'Silty';
+	return 'Clay';
+}
+const $ = (sel) => document.querySelector(sel);
+const hudDay = $('#hudDay'), hudCash = $('#hudCash');
+const btnPlant = $('#btnPlant'), btnFert = $('#btnFert'), btnIrr = $('#btnIrr');
+const btnPlayPause = $('#btnPlayPause'), btnStep = $('#btnStep');
+const rngSpeed = $('#rngSpeed'), lblDayLen = $('#lblDayLen');
+const kvSpot = $('#kvSpot'), kvSoil = $('#kvSoil'), kvStatus = $('#kvStatus');
+const picker = $('#picker'), pickerInfo = $('#pickerInfo'), cropGrid = $('#cropGrid'), btnClosePicker = $('#btnClosePicker');
+const hint = $('#hint'), hintBody = $('#hintBody');
+
+const game = { day:1, timer:null, dayMs:Number(rngSpeed.value), cash:500 };
+hudDay.textContent = '1'; hudCash.textContent = String(game.cash);
+lblDayLen.textContent = `${Math.round(game.dayMs/100)/10}s`.replace('.0','');
+
+/* =================== Crop catalog (Tanzania-focused) =================== */
+const cropCatalog = [
+	// name, id, soils, requiresWater, daysToMature, seedCost, sellPrice, emoji
+	{ id:'maize',      name:'Maize (Mahindi)',        soils:['Loam','Sandy','Silty'], requiresWater:false, days:10, seed:20, sell:60, emoji:'🌽' },
+	{ id:'rice',       name:'Rice (Mchele)',          soils:['Clay','Silty'],         requiresWater:false, days:10, seed:25, sell:70, emoji:'🌾' },
+	{ id:'cassava',    name:'Cassava (Muhogo)',       soils:['Sandy','Loam'],         requiresWater:false, days:12, seed:30, sell:90, emoji:'🥔' },
+	{ id:'sorghum',    name:'Sorghum (Mtama)',        soils:['Sandy','Loam'],         requiresWater:false, days:10, seed:18, sell:55, emoji:'🌾' },
+	{ id:'millet',     name:'Millet (Uwele)',         soils:['Sandy','Loam'],         requiresWater:false, days:9,  seed:16, sell:50, emoji:'🌾' },
+	{ id:'banana',     name:'Banana (Ndizi)',         soils:['Loam','Silty'],         requiresWater:false, days:14, seed:40, sell:120, emoji:'🍌' },
+	{ id:'mango',      name:'Mango (Embe)',           soils:['Loam','Sandy'],         requiresWater:false, days:14, seed:45, sell:140, emoji:'🥭' },
+	{ id:'avocado',    name:'Avocado',                soils:['Loam','Silty'],         requiresWater:false, days:14, seed:45, sell:130, emoji:'🥑' },
+	{ id:'papaya',     name:'Papaya (Papai)',         soils:['Loam','Sandy'],         requiresWater:false, days:12, seed:30, sell:100, emoji:'🍈' },
+	{ id:'pineapple',  name:'Pineapple (Nanasi)',     soils:['Sandy','Loam'],         requiresWater:false, days:12, seed:35, sell:110, emoji:'🍍' },
+	{ id:'tomato',     name:'Tomato (Nyanya)',        soils:['Loam','Silty'],         requiresWater:false, days:8,  seed:15, sell:50, emoji:'🍅' },
+	{ id:'onion',      name:'Onion (Kitunguu)',       soils:['Sandy','Loam'],         requiresWater:false, days:9,  seed:12, sell:45, emoji:'🧅' },
+	{ id:'spinach',    name:'Spinach (Mchicha)',      soils:['Loam','Silty'],         requiresWater:false, days:7,  seed:10, sell:40, emoji:'🥬' },
+	{ id:'cowpea',     name:'Cowpea (Kunde)',         soils:['Sandy','Loam'],         requiresWater:false, days:9,  seed:12, sell:45, emoji:'🫘' },
+	{ id:'pigeonpea',  name:'Pigeon pea (Mbaazi)',    soils:['Sandy','Loam'],         requiresWater:false, days:11, seed:22, sell:70, emoji:'🫘' },
+	{ id:'groundnut',  name:'Groundnut (Karanga)',    soils:['Sandy','Loam'],         requiresWater:false, days:10, seed:20, sell:65, emoji:'🥜' },
+	{ id:'sunflower',  name:'Sunflower (Alizeti)',    soils:['Sandy','Loam'],         requiresWater:false, days:10, seed:18, sell:60, emoji:'🌻' },
+	{ id:'cashew',     name:'Cashew (Korosho)',       soils:['Sandy'],                requiresWater:false, days:14, seed:50, sell:160, emoji:'🥜' },
+	{ id:'clove',      name:'Cloves (Karafuu)',       soils:['Loam','Silty'],         requiresWater:false, days:15, seed:55, sell:180, emoji:'🌿' },
+	{ id:'mangrove',   name:'Mangrove (Mikoko)',      soils:['Silty','Clay','Sandy'], requiresWater:true,  days:12, seed:20, sell:90, emoji:'🌳' } // only in water
+];
+/* seed inventory: cropId -> quantity */
+const seeds = {};
+cropCatalog.forEach(c => seeds[c.id] = 0);
+
+/* =================== Plants and growth =================== */
+const plants = []; // {latlng, dayPlanted, stageIndex, marker, cropId}
+const stageIcons = [
+	{ name:'Seed',   size:36, emoji:'🌱' },
+	{ name:'Sprout', size:56, emoji:'🌿' },
+	{ name:'Young',  size:86, emoji:'🪴' },
+	{ name:'Tree',   size:140, emoji:'🌳' } // used as intermediate for tree-like crops
+];
+function makeEmojiMarker(latlng, emoji, px, title='') {
+	return L.marker(latlng, { icon: L.divIcon({
+		className:'emoji',
+		html:`<div title="${title}" style="font-size:${px}px; line-height:1; filter: drop-shadow(0 3px 3px rgba(0,0,0,0.55));">${emoji}</div>`,
+		iconSize:[px,px], iconAnchor:[px/2, px/2]
+	})});
+}
+function cropStageEmoji(crop, ageDays) {
+	// 0..mature → stages then crop emoji
+	if (ageDays < Math.ceil(crop.days * 0.2)) return {emoji:stageIcons[0].emoji, size:stageIcons[0].size};
+	if (ageDays < Math.ceil(crop.days * 0.5)) return {emoji:stageIcons[1].emoji, size:stageIcons[1].size};
+	if (ageDays < Math.ceil(crop.days * 0.8)) return {emoji:stageIcons[2].emoji, size:stageIcons[2].size};
+	// Mature: show crop emoji big (trees/fruit look big)
+	return {emoji:crop.emoji, size: crop.id==='mangrove' || ['mango','banana','avocado'].includes(crop.id) ? 140 : 100};
+}
+function addPlant(latlng, cropId) {
+	const crop = cropCatalog.find(c => c.id === cropId);
+	const s = cropStageEmoji(crop, 0);
+	const m = makeEmojiMarker(latlng, s.emoji, s.size, crop.name).addTo(map);
+	const plant = { latlng, dayPlanted: game.day, marker:m, cropId, harvested:false };
+	m.on('click', () => tryHarvest(plant));
+	plants.push(plant);
+}
+function updatePlants() {
+	for (const p of plants) {
+		if (p.harvested) continue;
+		const crop = cropCatalog.find(c => c.id === p.cropId);
+		const age = Math.max(0, game.day - p.dayPlanted);
+		const s = cropStageEmoji(crop, age);
+		p.marker.setIcon(L.divIcon({
+			className:'emoji',
+			html:`<div title="${crop.name}" style="font-size:${s.size}px; line-height:1; filter: drop-shadow(0 3px 3px rgba(0,0,0,0.55));">${s.emoji}</div>`,
+			iconSize:[s.size,s.size], iconAnchor:[s.size/2, s.size/2]
+		}));
+	}
+}
+function isMature(plant) {
+	const crop = cropCatalog.find(c => c.id === plant.cropId);
+	const age = game.day - plant.dayPlanted;
+	return age >= crop.days;
+}
+function tryHarvest(plant) {
+	if (plant.harvested) return;
+	const crop = cropCatalog.find(c => c.id === plant.cropId);
+	if (!isMature(plant)) {
+		L.popup({offset:[0,-8]}).setLatLng(plant.latlng).setContent(`${crop.name}: not ready yet.`).openOn(map);
+		return;
+	}
+	plant.harvested = true;
+	map.removeLayer(plant.marker);
+	game.cash += crop.sell;
+	hudCash.textContent = String(game.cash);
+	L.popup({offset:[0,-8]}).setLatLng(plant.latlng).setContent(`Harvested ${crop.name}! +TSh ${crop.sell}`).openOn(map);
+}
+
+/* =================== Map click and status =================== */
+let lastLatLng = null, lastSoil = '—';
+let spotMarker = null;
+
+map.on('click', async (e) => {
+	lastLatLng = e.latlng;
+	lastSoil = soilAt(e.latlng.lat, e.latlng.lng);
+	const inBld = isNoPlantArea(e.latlng);
+	const inWater = isWaterArea(e.latlng);
+
+	kvSpot.textContent = `${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)}`;
+	kvSoil.textContent = lastSoil;
+	kvStatus.textContent = inBld ? 'No-plant (buildings/town)' : (inWater ? 'Water zone' : 'OK');
+
+	if (!spotMarker) spotMarker = L.marker(e.latlng).addTo(map); else spotMarker.setLatLng(e.latlng);
+
+	const statusHtml = inBld ? '<span style="color:#fca5a5;">No-plant (buildings)</span>' :
+		inWater ? '<span style="color:#60a5fa;">Water zone</span>' : '<span style="color:#86efac;">OK to plant</span>';
+
+	spotMarker.bindPopup(`
+		<div><b>Coords:</b> ${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)}</div>
+		<div><b>Soil:</b> ${lastSoil}</div>
+		<div><b>Status:</b> ${statusHtml}</div>
+	`).openPopup();
+
+	// Enable plant if OK or if water zone (mangrove option will enforce)
+	btnPlant.disabled = inBld;
+	btnFert.disabled = false; btnIrr.disabled = false;
+});
+
+/* =================== Crop picker =================== */
+function openPicker() {
+	if (!lastLatLng) { alert('Tap the map first.'); return; }
+	const inBld = isNoPlantArea(lastLatLng);
+	if (inBld) { alert('You cannot plant on towns/buildings. Pick a nearby field.'); return; }
+
+	const inWater = isWaterArea(lastLatLng);
+	pickerInfo.textContent = `Soil: ${lastSoil} | Water zone: ${inWater ? 'Yes' : 'No'}`;
+
+	const allowed = cropCatalog.filter(c => {
+		const soilOk = c.soils.includes(lastSoil);
+		const waterOk = inWater ? c.requiresWater === true : c.requiresWater !== true;
+		return soilOk && waterOk;
+	});
+
+	cropGrid.innerHTML = '';
+	if (!allowed.length) {
+		const div = document.createElement('div');
+		div.className = 'small';
+		div.textContent = 'No crops match this soil/location. Try a different spot.';
+		cropGrid.appendChild(div);
+	}
+
+	allowed.forEach(c => {
+		const card = document.createElement('div');
+		card.className = 'card';
+		card.innerHTML = `
+			<div class="title">${c.emoji} ${c.name}</div>
+			<div class="line"><span>Soils</span><span>${c.soils.join(', ')}</span></div>
+			<div class="line"><span>Days to mature</span><span>${c.days}</span></div>
+			<div class="line"><span>Seed</span><span>TSh ${c.seed}</span></div>
+			<div class="line"><span>Sells for</span><span>TSh ${c.sell}</span></div>
+			<div class="buyRow">
+				<button class="btn" data-act="plant" data-id="${c.id}">Plant</button>
+				<button class="btn" data-act="buy" data-id="${c.id}">Buy Seed</button>
+				<span class="small">You own: <b id="own-${c.id}">${seeds[c.id]}</b></span>
+			</div>
+		`;
+		cropGrid.appendChild(card);
+	});
+	picker.style.display = 'grid';
+}
+function closePicker() { picker.style.display = 'none'; }
+btnClosePicker.addEventListener('click', closePicker);
+cropGrid.addEventListener('click', (e) => {
+	const btn = e.target.closest('button[data-act]');
+	if (!btn) return;
+	const id = btn.getAttribute('data-id');
+	const act = btn.getAttribute('data-act');
+	const crop = cropCatalog.find(c => c.id === id);
+	if (act === 'buy') {
+		if (game.cash < crop.seed) { alert('Not enough money to buy seeds.'); return; }
+		game.cash -= crop.seed;
+		seeds[id] += 1;
+		hudCash.textContent = String(game.cash);
+		$('#own-' + id).textContent = seeds[id];
+	} else if (act === 'plant') {
+		if (!lastLatLng) { alert('Tap the map first.'); return; }
+		const inWater = isWaterArea(lastLatLng);
+		if (inWater && !crop.requiresWater) { alert('Only mangrove can be planted in water.'); return; }
+		if (!inWater && crop.requiresWater) { alert('Mangrove must be planted in water zones.'); return; }
+		// need seed
+		if (seeds[id] <= 0) {
+			if (!confirm(`You have no ${crop.name} seeds. Buy one for TSh ${crop.seed}?`)) return;
+			if (game.cash < crop.seed) { alert('Not enough money.'); return; }
+			game.cash -= crop.seed; seeds[id] += 1; hudCash.textContent = String(game.cash);
+			const own = $('#own-' + id); if (own) own.textContent = seeds[id];
+		}
+		seeds[id] -= 1;
+		if ($('#own-' + id)) $('#own-' + id).textContent = seeds[id];
+		addPlant(lastLatLng, id);
+		closePicker();
+		L.popup({offset:[0,-8]}).setLatLng(lastLatLng).setContent(`Planted ${crop.name}!`).openOn(map);
+	}
+});
+
+/* =================== Time & controls =================== */
+function tickDay() {
+	game.day += 1; hudDay.textContent = String(game.day);
+	updatePlants();
+}
+btnPlayPause.addEventListener('click', () => {
+	if (game.timer) { clearInterval(game.timer); game.timer=null; btnPlayPause.textContent='Play ▷'; }
+	else { game.timer=setInterval(tickDay, game.dayMs); btnPlayPause.textContent='Pause ⏸'; }
+});
+btnStep.addEventListener('click', () => { if (!game.timer) tickDay(); });
+rngSpeed.addEventListener('input', () => {
+	game.dayMs = Number(rngSpeed.value);
+	lblDayLen.textContent = `${Math.round(game.dayMs/100)/10}s`.replace('.0','');
+	if (game.timer) { clearInterval(game.timer); game.timer=setInterval(tickDay, game.dayMs); }
+});
+
+/* =================== Actions & keys =================== */
+btnPlant.addEventListener('click', openPicker);
+btnFert.addEventListener('click', () => {
+	if (!lastLatLng) return alert('Tap the map first.');
+	L.popup({offset:[0,-8]}).setLatLng(lastLatLng).setContent('Fertilizer added! 🌾').openOn(map);
+});
+btnIrr.addEventListener('click', () => {
+	if (!lastLatLng) return alert('Tap the map first.');
+	L.popup({offset:[0,-8]}).setLatLng(lastLatLng).setContent('Irrigated! 💧').openOn(map);
+});
+document.addEventListener('keydown', (e) => {
+	const k = e.key;
+	if (k === 'p' || k === 'P') openPicker();
+	if (k === 'f' || k === 'F') btnFert.click();
+	if (k === 'i' || k === 'I') btnIrr.click();
+	if (k === ' ') { e.preventDefault(); btnPlayPause.click(); }
+	if (k === '+') { rngSpeed.value = Math.max(500, Number(rngSpeed.value) - 500); rngSpeed.dispatchEvent(new Event('input')); }
+	if (k === '-') { rngSpeed.value = Math.min(15000, Number(rngSpeed.value) + 500); rngSpeed.dispatchEvent(new Event('input')); }
+});
+
+/* =================== First-time hint =================== */
+function showHint(msg) { hintBody.textContent = msg; hint.style.display = 'block'; setTimeout(()=>hint.style.display='none', 3500); }
+showHint('Tap the map, then press P to choose a Tanzanian crop.');
+</script>
+</body>
+</html>
+```
